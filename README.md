@@ -23,6 +23,17 @@ d. Create OAuth credentials:
   - Keep this file in the same folder as the program
 
 ## Set Up AutoTT
+> [!TIP]
+> Install in a virtual environment for easy access.
+> To make a virtual environment, use
+> ```
+> python -m venv venv
+> ```
+> And activate using
+> ```
+> venv\scripts\activate
+> ```
+
 
 1. Ensure python and pip are installed
 2. Install Tesseract OCR to your System and add it to the PATH, or save to `C:\Program Files (x86)\Tesseract`
