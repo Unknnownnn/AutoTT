@@ -1,7 +1,12 @@
 # Automatic Image to Google Calender for tables
 
-A CLI based python program to automatically sync data extracted from an image using pytesseract and OCR and export to Google Calender using 
+A CLI based python program to automatically sync data extracted from an image using pytesseract and OCR and export to Google Calender using API calls
 
+![image](https://github.com/user-attachments/assets/870e6d16-aec2-4924-9ed8-ee2581e0422c)
+
+
+> [!NOTE]
+> App is in testing phase and hence Google doesn't allow public accounts to connect to the app. Follow the next step to configure it to your own account.
 <br/>
 
 ## Set Up Google Calendar API
