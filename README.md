@@ -15,6 +15,7 @@ a. Go to Google Cloud Console:
     https://console.cloud.google.com/
     
 b. Create a project or use an existing one.
+
 c. Enable Google Calendar API:
   - Go to APIs & Services > Library
   - Search for Google Calendar API
