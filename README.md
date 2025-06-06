@@ -1,8 +1,8 @@
 # Automatic Image to Google Calender for tables
 
-A CLI based python program to automatically sync data extracted from an image using pytesseract and OCR and export to Google Calender using API calls
+A python based NextJS webpage to automatically sync data extracted from an image using pytesseract and OCR and export to Google Calender using API calls
 
-![image](https://github.com/user-attachments/assets/870e6d16-aec2-4924-9ed8-ee2581e0422c)
+![Screenshot 2025-06-06 131841](https://github.com/user-attachments/assets/430434f3-1cc3-4653-9650-6d78b8f5eda8)
 
 
 > [!NOTE]
@@ -50,7 +50,15 @@ d. Create OAuth credentials:
 ```
 pip install -r requirements.txt
 ```
-4. Run the CLI application using
+4. Run the Webpage using
 ```
-python calendar_sync.py
+cd frontend
+npm install
+npm run dev
+```
+OR
+```
+cd frontend
+yarn install
+yarn dev
 ```
