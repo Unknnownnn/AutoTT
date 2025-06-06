@@ -6,6 +6,8 @@ import re
 import csv
 import argparse
 import os
+import sys
+import json
 
 
 def parse_arguments():
@@ -174,6 +176,9 @@ def map_periods_to_timings(matrix):
                     print(f"Period {period} (cleaned: {cleaned_period}) does not match the expected pattern. Skipping.")
 
                 timing_index += 1
+                
+            elif period == '':
+                timing_index += 1
             else:
                 print(f"Skipping period in {day}: {period}")
         
@@ -213,7 +218,7 @@ def extract_course_code(period_code):
 def display_day_schedules(day_schedules, course_map):
     if not course_map:
         print("\nWarning: No course mappings available. Displaying original codes.")
-        return
+        return {}
     
     print("\nDetailed Day-wise Schedules:")
     all_periods = {}
@@ -273,6 +278,7 @@ def display_day_schedules(day_schedules, course_map):
             merged_periods.append(current)
             i += 1
         
+        # Ensure we store an empty array even if there are no periods
         all_periods[day] = merged_periods
         
         # Display periods in a structured format
@@ -317,31 +323,44 @@ def read_course_codes(csv_path):
         print("Column 2: Course names")
         return {}
 
-def main(image_path, csv_path, return_schedules=False):
-    course_map = read_course_codes(csv_path)
-    image, gray, thresh = preprocess_image(image_path)
-    cells = get_cell_regions(thresh)
-    if not cells:
-        print("No cells detected in the table")
-        return None if return_schedules else None
-    matrix = extract_text_from_cells(image, cells)
-    day_schedules = map_periods_to_timings(matrix)
-    result = display_day_schedules(day_schedules, course_map)
-    return result if return_schedules else None
+def main(image_path=None, csv_path=None, return_schedules=False):
+    try:
+        # Process image and get regions
+        image, gray, thresh = preprocess_image(image_path)
+        cells = get_cell_regions(thresh)
+        
+        if not cells:
+            raise ValueError("No cells detected in the table")
+            
+        # Extract text and map periods
+        matrix = extract_text_from_cells(image, cells)
+        day_schedules = map_periods_to_timings(matrix)
+        course_map = read_course_codes(csv_path)
+        
+        # Format and return or display the schedule
+        result = display_day_schedules(day_schedules, course_map)
+        if return_schedules:
+            # Add an extra check to ensure all values are arrays
+            formatted_result = {
+                day: (periods if isinstance(periods, list) else [])
+                for day, periods in result.items()
+            }
+            print(json.dumps(formatted_result))
+            return formatted_result
+        return None
+    except Exception as e:
+        error_msg = str(e)
+        if return_schedules:
+            print(json.dumps({"error": error_msg}))
+        else:
+            print(f"Error: {error_msg}", file=sys.stderr)
+        return None
 
 if __name__ == "__main__":
-    args = parse_arguments()
-    
-    # Verify files exist
-    if not os.path.exists(args.image):
-        print(f"Error: Image file not found at {args.image}")
-        exit(1)
-    if not os.path.exists(args.csv):
-        print(f"Error: CSV file not found at {args.csv}")
-        exit(1)
-        
-    try:
-        main(args.image, args.csv)
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        exit(1)
+    parser = argparse.ArgumentParser(description="Process timetable image and course code CSV")
+    parser.add_argument("image_path", help="Path to the timetable image")
+    parser.add_argument("csv_path", help="Path to the course codes CSV file")
+    parser.add_argument("--return-schedules", action="store_true", help="Return schedules as JSON")
+    args = parser.parse_args()
+
+    main(args.image_path, args.csv_path, args.return_schedules)
