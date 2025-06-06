@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import { join } from 'path';
 
-export async function GET(_: Request) {
+export async function GET() {
   try {
     // Get the project root directory
     const projectRoot = process.cwd().includes('frontend') 
