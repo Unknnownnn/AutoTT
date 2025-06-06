@@ -4,7 +4,7 @@ import { join } from 'path';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 
-export async function GET() {
+export async function GET(): Promise<Response> {
     try {
         const projectRoot = join(process.cwd(), '..');
         const tokenPath = join(projectRoot, 'token.json');
@@ -17,7 +17,7 @@ export async function GET() {
             });
         }
 
-        return new Promise((resolve) => {
+        return new Promise<Response>((resolve) => {
             const pythonProcess = spawn('python', [
                 join(projectRoot, 'calendar_sync.py'),
                 '--get-user',
@@ -39,19 +39,20 @@ export async function GET() {
             pythonProcess.on('close', (code) => {
                 if (code !== 0) {
                     console.error('Process failed:', errorData);
-                    return resolve(NextResponse.json(
+                    resolve(NextResponse.json(
                         { success: false, authenticated: false, message: 'Failed to get user info' },
                         { status: 500 }
                     ));
+                    return;
                 }
 
                 try {
                     const jsonStr = outputData.trim().split('\n').pop() || '';
                     const result = JSON.parse(jsonStr);
-                    return resolve(NextResponse.json(result));
+                    resolve(NextResponse.json(result));
                 } catch (error) {
                     console.error('Failed to parse Python output:', error);
-                    return resolve(NextResponse.json(
+                    resolve(NextResponse.json(
                         { success: false, authenticated: false, message: 'Failed to parse user info' },
                         { status: 500 }
                     ));
@@ -67,7 +68,7 @@ export async function GET() {
     }
 }
 
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
     try {
         const data = await request.json();
         

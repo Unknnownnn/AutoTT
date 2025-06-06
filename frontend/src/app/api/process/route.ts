@@ -4,7 +4,7 @@ import { join } from 'path';
 import { writeFile } from 'fs/promises';
 import { existsSync, mkdirSync, unlinkSync } from 'fs';
 
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
     try {
         const formData = await request.formData();
         const image = formData.get('image') as File;
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
         await writeFile(imagePath, imageBuffer);
         await writeFile(csvPath, csvBuffer);
 
-        return new Promise((resolve) => {
+        return new Promise<Response>((resolve) => {
             const args = [
                 join(projectRoot, 'calendar_sync.py'),
                 '--image', imagePath,
@@ -76,19 +76,20 @@ export async function POST(request: Request) {
 
                 if (code !== 0) {
                     console.error('Process failed:', errorData);
-                    return resolve(NextResponse.json(
+                    resolve(NextResponse.json(
                         { error: `Process failed: ${errorData}` },
                         { status: 500 }
                     ));
+                    return;
                 }
 
                 try {
                     const jsonStr = outputData.trim().split('\n').pop() || '';
                     const result = JSON.parse(jsonStr);
-                    return resolve(NextResponse.json(result));
+                    resolve(NextResponse.json(result));
                 } catch (parseError) {
                     console.error('Failed to parse Python output:', parseError);
-                    return resolve(NextResponse.json(
+                    resolve(NextResponse.json(
                         { error: `Failed to parse Python output: ${outputData}` },
                         { status: 500 }
                     ));
