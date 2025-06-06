@@ -50,7 +50,7 @@ export async function GET(req: Request) {
           const parsedResult = JSON.parse(jsonMatch[0]);
           console.log('Parsed user info result:', parsedResult);
           resolve(parsedResult);
-        } catch (err) {
+        } catch (_error) {
           console.error('Failed to parse response:', outputData);
           reject(new Error(`Failed to parse response: ${outputData}`));
         }
@@ -114,7 +114,7 @@ export async function POST(req: Request) {
             return;
           }
           resolve(JSON.parse(jsonMatch[0]));
-        } catch (err) {
+        } catch (_error) {
           reject(new Error(`Failed to parse response: ${outputData}`));
         }
       });

@@ -75,7 +75,7 @@ export async function POST(req: Request) {
             return;
           }
           resolve(JSON.parse(jsonMatch[0]));
-        } catch (_) {
+        } catch {
           reject(new Error(`Failed to parse output: ${outputData}`));
         }
       });

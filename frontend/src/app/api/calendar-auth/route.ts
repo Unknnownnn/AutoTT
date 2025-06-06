@@ -10,7 +10,7 @@ export async function POST(request: Request) {
         
         // If we have an auth code, complete the authentication
         if (data.code) {
-            return new Promise((resolve, reject) => {
+            return new Promise<NextResponse>((resolve) => {
                 const pythonProcess = spawn('python', [
                     join(projectRoot, 'calendar_sync.py'),
                     '--complete-auth',
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         }
         
         // Start the authentication process
-        return new Promise((resolve, reject) => {
+        return new Promise<NextResponse>((resolve) => {
             const pythonProcess = spawn('python', [
                 join(projectRoot, 'calendar_sync.py'),
                 '--auth',
