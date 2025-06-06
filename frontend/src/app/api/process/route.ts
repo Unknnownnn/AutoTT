@@ -54,6 +54,36 @@ export async function POST(req: Request) {
     console.log('Current working directory:', process.cwd());
     console.log('Temp directory:', tempDir);
 
+    // Verify Tesseract installation
+    try {
+      const tesseractCheck = spawn('tesseract', ['--version']);
+      tesseractCheck.on('error', (error) => {
+        console.error('Tesseract check error:', error);
+        throw new Error('Tesseract is not properly installed');
+      });
+      
+      await new Promise((resolve, reject) => {
+        let versionInfo = '';
+        tesseractCheck.stdout.on('data', (data) => {
+          versionInfo += data.toString();
+        });
+        tesseractCheck.on('close', (code) => {
+          if (code === 0) {
+            console.log('Tesseract version info:', versionInfo);
+            resolve(versionInfo);
+          } else {
+            reject(new Error('Tesseract version check failed'));
+          }
+        });
+      });
+    } catch (error) {
+      console.error('Tesseract verification failed:', error);
+      return NextResponse.json(
+        { error: 'Tesseract OCR is not properly installed on the server' },
+        { status: 500 }
+      );
+    }
+
     // Create temp directory using fs.promises.mkdir
     await mkdir(tempDir, { recursive: true });
 

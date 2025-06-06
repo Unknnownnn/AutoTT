@@ -1,9 +1,18 @@
 services:
   - type: web
-    name: autott-frontend
+    name: autott
     env: node
-    buildCommand: cd frontend && yarn install && yarn build
-    startCommand: cd frontend && yarn start
+    buildCommand: |
+      # Install system dependencies including Tesseract
+      apt-get update -y
+      apt-get install -y tesseract-ocr
+      apt-get install -y python3-pip
+      apt-get install -y python3-opencv
+      # Install Python dependencies
+      cd frontend
+      npm install
+      npm run build
+    startCommand: cd frontend && npm start
     envVars:
       - key: NODE_ENV
         value: production
