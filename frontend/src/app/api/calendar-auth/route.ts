@@ -1,89 +1,112 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import { join } from 'path';
-import fs from 'fs';
 
-export async function POST(req: Request) {
-  try {
-    // Get the project root directory for credentials
-    const projectRoot = process.cwd().includes('frontend') 
-      ? join(process.cwd(), '..') 
-      : process.cwd();
+export async function POST(request: Request) {
+    try {
+        const data = await request.json();
+        // Get the project root directory (go up three levels from api/calendar-auth)
+        const projectRoot = join(process.cwd(), '..',);
+        
+        // If we have an auth code, complete the authentication
+        if (data.code) {
+            return new Promise((resolve, reject) => {
+                const pythonProcess = spawn('python', [
+                    join(projectRoot, 'calendar_sync.py'),
+                    '--complete-auth',
+                    data.code,
+                    projectRoot
+                ]);
 
-    // First, prepare the authentication script
-    const prepareProcess = spawn('python', [
-      join(projectRoot, 'calendar_sync.py'),
-      '--auth-new-window',
-      projectRoot
-    ], {
-      cwd: projectRoot,
-    });
+                let outputData = '';
+                let errorData = '';
 
-    const scriptPath = await new Promise((resolve, reject) => {
-      let outputData = '';
-      let errorData = '';
+                pythonProcess.stdout.on('data', (data) => {
+                    outputData += data.toString();
+                });
 
-      prepareProcess.stdout.on('data', (data) => {
-        outputData += data.toString();
-      });
+                pythonProcess.stderr.on('data', (data) => {
+                    errorData += data.toString();
+                    console.error('Python stderr:', errorData);
+                });
 
-      prepareProcess.stderr.on('data', (data) => {
-        console.error('Prepare auth stderr:', data.toString());
-        errorData += data.toString();
-      });
+                pythonProcess.on('close', (code) => {
+                    console.log('Python process exited with code:', code);
+                    console.log('Python output:', outputData);
+                    
+                    if (code !== 0) {
+                        return resolve(NextResponse.json(
+                            { error: `Process failed: ${errorData}` },
+                            { status: 500 }
+                        ));
+                    }
 
-      prepareProcess.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(`Failed to prepare authentication: ${errorData}`));
-          return;
+                    try {
+                        // Find the last valid JSON object in the output
+                        const jsonStr = outputData.trim().split('\n').pop() || '';
+                        const result = JSON.parse(jsonStr);
+                        return resolve(NextResponse.json(result));
+                    } catch (e) {
+                        console.error('Failed to parse Python output:', e);
+                        return resolve(NextResponse.json(
+                            { error: `Failed to parse Python output: ${outputData}` },
+                            { status: 500 }
+                        ));
+                    }
+                });
+            });
         }
+        
+        // Start the authentication process
+        return new Promise((resolve, reject) => {
+            const pythonProcess = spawn('python', [
+                join(projectRoot, 'calendar_sync.py'),
+                '--auth',
+                projectRoot
+            ]);
 
-        try {
-          const jsonMatch = outputData.match(/\{[\s\S]*\}/);
-          if (!jsonMatch) {
-            reject(new Error('No JSON response from prepare script'));
-            return;
-          }
-          const result = JSON.parse(jsonMatch[0]);
-          if (!result.success) {
-            reject(new Error(result.error || 'Failed to prepare authentication'));
-            return;
-          }
-          resolve(result.auth_script);
-        } catch (err) {
-          reject(new Error(`Failed to parse prepare script response: ${err}`));
-        }
-      });
-    });
+            let outputData = '';
+            let errorData = '';
 
-    // Now launch the authentication script in a new window
-    spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `python "${scriptPath}"`], {
-      cwd: projectRoot,
-      shell: true,
-    });
+            pythonProcess.stdout.on('data', (data) => {
+                outputData += data.toString();
+            });
 
-    // Wait a bit to ensure the script starts
-    await new Promise(resolve => setTimeout(resolve, 1000));
+            pythonProcess.stderr.on('data', (data) => {
+                errorData += data.toString();
+                console.error('Python stderr:', errorData);
+            });
 
-    // Clean up the temporary script after a delay
-    setTimeout(() => {
-      try {
-        fs.unlinkSync(scriptPath);
-      } catch (err) {
-        console.error('Failed to clean up auth script:', err);
-      }
-    }, 60000); // Clean up after 1 minute
+            pythonProcess.on('close', (code) => {
+                console.log('Python process exited with code:', code);
+                console.log('Python output:', outputData);
+                
+                if (code !== 0) {
+                    return resolve(NextResponse.json(
+                        { error: `Process failed: ${errorData}` },
+                        { status: 500 }
+                    ));
+                }
 
-    return NextResponse.json({
-      success: true,
-      message: "Authentication window opened. Please complete the process in the new window."
-    });
-
-  } catch (error) {
-    console.error('Authentication error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to start authentication' },
-      { status: 500 }
-    );
-  }
+                try {
+                    // Find the last valid JSON object in the output
+                    const jsonStr = outputData.trim().split('\n').pop() || '';
+                    const result = JSON.parse(jsonStr);
+                    return resolve(NextResponse.json(result));
+                } catch (e) {
+                    console.error('Failed to parse Python output:', e);
+                    return resolve(NextResponse.json(
+                        { error: `Failed to parse Python output: ${outputData}` },
+                        { status: 500 }
+                    ));
+                }
+            });
+        });
+    } catch (error) {
+        console.error('Error in calendar auth:', error);
+        return NextResponse.json(
+            { error: 'Failed to process authentication' },
+            { status: 500 }
+        );
+    }
 } 

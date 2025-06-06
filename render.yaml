@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: autott-frontend
+    env: node
+    buildCommand: cd frontend && yarn install && yarn build
+    startCommand: cd frontend && yarn start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        value: https://autott-backend.onrender.com
+
+  - type: web
+    name: autott-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: FRONTEND_URL
+        value: https://autott.onrender.com
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_PROJECT_ID
+        sync: false 

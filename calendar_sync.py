@@ -10,6 +10,7 @@ from googleapiclient.discovery import build
 from main import main as process_timetable
 from datetime import datetime, timedelta
 import os
+from google_credentials import ensure_credentials_file
 
 # Scope for calendar access
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
@@ -18,6 +19,13 @@ def get_auth_url(credentials_dir=None):
     """Get the authorization URL and store the flow state"""
     if credentials_dir is None:
         credentials_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Ensure credentials.json exists using environment variables
+    if not ensure_credentials_file(credentials_dir):
+        return {
+            "error": "Failed to create credentials.json from environment variables",
+            "success": False
+        }
     
     credentials_path = os.path.join(credentials_dir, 'credentials.json')
     
@@ -508,7 +516,7 @@ def sync_from_web(schedule_json_path, selected_days=None, is_recurring=True, cre
         }
 
 def authenticate_in_new_window(credentials_dir=None):
-    """Start authentication in a new console window"""
+    """Start authentication in a headless environment"""
     if credentials_dir is None:
         credentials_dir = os.path.dirname(os.path.abspath(__file__))
     
@@ -522,46 +530,66 @@ def authenticate_in_new_window(credentials_dir=None):
         }
 
     try:
-        # Create a temporary script that will handle the authentication
-        auth_script_path = os.path.join(credentials_dir, '_temp_auth.py')
-        with open(auth_script_path, 'w') as f:
-            f.write(f"""
-import os
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.oauth2.credentials import Credentials
-
-SCOPES = ['https://www.googleapis.com/auth/calendar.events']
-credentials_path = r'{credentials_path}'
-token_path = r'{token_path}'
-
-print("Starting Google Calendar authentication...")
-print("A browser window will open with the Google authorization page.")
-print("After authorizing, copy the code from the browser and paste it here.")
-print()
-
-try:
-    flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
-    creds = flow.run_console()
-    
-    # Save the credentials
-    with open(token_path, 'w') as token:
-        token.write(creds.to_json())
-    
-    print("\\nAuthentication successful! You can close this window.")
-    print("Your calendar access token has been saved.")
-except Exception as e:
-    print(f"\\nAuthentication failed: {{str(e)}}")
-
-input("\\nPress Enter to close this window...")
-""")
-
+        flow = InstalledAppFlow.from_client_secrets_file(
+            credentials_path,
+            SCOPES,
+            redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+        )
+        
+        # Get the authorization URL
+        auth_url, _ = flow.authorization_url(
+            access_type='offline',
+            prompt='consent'
+        )
+        
         return {
             "success": True,
-            "auth_script": auth_script_path
+            "auth_url": auth_url,
+            "message": "Please visit this URL to authorize access to your Google Calendar"
         }
+        
     except Exception as e:
         return {
             "error": f"Failed to prepare authentication: {str(e)}",
+            "success": False
+        }
+
+def complete_auth_headless(auth_code, credentials_dir=None):
+    """Complete the authorization using the provided code in a headless environment"""
+    if credentials_dir is None:
+        credentials_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    credentials_path = os.path.join(credentials_dir, 'credentials.json')
+    token_path = os.path.join(credentials_dir, 'token.json')
+    
+    try:
+        flow = InstalledAppFlow.from_client_secrets_file(
+            credentials_path,
+            SCOPES,
+            redirect_uri='urn:ietf:wg:oauth:2.0:oob'
+        )
+        
+        try:
+            flow.fetch_token(code=auth_code)
+            creds = flow.credentials
+            
+            # Save the credentials
+            with open(token_path, 'w') as token:
+                token.write(creds.to_json())
+            
+            return {
+                "success": True,
+                "message": "Successfully authenticated with Google Calendar"
+            }
+        except Exception as e:
+            return {
+                "error": f"Failed to exchange code: {str(e)}",
+                "success": False
+            }
+            
+    except Exception as e:
+        return {
+            "error": str(e),
             "success": False
         }
 
@@ -666,16 +694,23 @@ if __name__ == '__main__':
             sys.exit(1)
             
         credentials_dir = sys.argv[2]
-        result = get_google_calendar_service(credentials_dir)
-        
-        if isinstance(result, dict):
-            print(json.dumps(result))
+        result = authenticate_in_new_window(credentials_dir)
+        print(json.dumps(result))
+        sys.exit(0)
+    
+    # Check if running in auth completion mode
+    if len(sys.argv) > 1 and sys.argv[1] == '--complete-auth':
+        if len(sys.argv) < 4:
+            print(json.dumps({
+                "error": "Missing auth code or credentials directory",
+                "success": False
+            }))
             sys.exit(1)
-        
-        print(json.dumps({
-            "success": True,
-            "message": "Successfully authenticated with Google Calendar"
-        }))
+            
+        auth_code = sys.argv[2]
+        credentials_dir = sys.argv[3]
+        result = complete_auth_headless(auth_code, credentials_dir)
+        print(json.dumps(result))
         sys.exit(0)
     
     # Check if script is being run with a JSON file path (web mode)
@@ -694,20 +729,6 @@ if __name__ == '__main__':
             credentials_dir=credentials_dir,
             start_date_str=start_date
         )
-        print(json.dumps(result))
-        sys.exit(0)
-    
-    # Check if running in new window auth mode
-    if len(sys.argv) > 1 and sys.argv[1] == '--auth-new-window':
-        if len(sys.argv) < 3:
-            print(json.dumps({
-                "error": "Missing credentials directory",
-                "success": False
-            }))
-            sys.exit(1)
-            
-        credentials_dir = sys.argv[2]
-        result = authenticate_in_new_window(credentials_dir)
         print(json.dumps(result))
         sys.exit(0)
     

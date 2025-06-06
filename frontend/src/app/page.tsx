@@ -59,7 +59,21 @@ export default function Home() {
   ];
 
   useEffect(() => {
-    // Fetch user info when component mounts
+    // Delete token.json and fetch user info when component mounts
+    const cleanup = async () => {
+      try {
+        const response = await fetch('/api/cleanup', {
+          method: 'POST',
+        });
+        if (!response.ok) {
+          console.error('Failed to cleanup token file OR not Logged in');
+        }
+      } catch (error) {
+        console.error('Error during cleanup:', error);
+      }
+    };
+
+    cleanup();
     fetchUserInfo();
   }, []);
 
@@ -198,7 +212,7 @@ export default function Home() {
       formData.append('csv_file', csvFile!);
       formData.append('sync_to_calendar', 'true');
       formData.append('selected_days', selectedDays.join(','));
-      formData.append('is_recurring', String(isRecurring));
+      formData.append('is_recurring', isRecurring.toString());
       formData.append('start_date', startDate);
 
       const response = await fetch('/api/process', {
@@ -206,44 +220,58 @@ export default function Home() {
         body: formData,
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        let errorMessage = 'Failed to sync with calendar';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch (parseError) {
-          console.error('Error parsing error response:', parseError);
-        }
-        throw new Error(errorMessage);
+        throw new Error(data.error || 'Failed to sync calendar');
       }
 
-      const data = await response.json();
-      
-      // Handle authentication requirement
+      // Check if we need authentication
       if (data.needs_auth && data.auth_url) {
         setAuthUrl(data.auth_url);
         setShowAuthModal(true);
         return;
       }
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
-      if (data.available_days) {
-        // setAvailableDays(data.available_days);
-      }
-      
-      setSyncMessage(data.message || 'Schedule synced to calendar successfully!');
-      
-      if (data.warnings) {
-        setSyncMessage(prev => `${prev}\n\nWarnings:\n${data.warnings.join('\n')}`);
-      }
+
+      setSyncMessage(data.message || 'Successfully synced to calendar');
+      await fetchUserInfo(); // Refresh user info after successful sync
     } catch (err) {
       console.error('Sync error:', err);
-      setError(err instanceof Error ? err.message : 'Failed to sync with calendar');
+      setError(err instanceof Error ? err.message : 'Failed to sync calendar');
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Add this new function to start the auth flow
+  const startAuth = async () => {
+    try {
+      setAuthLoading(true);
+      const response = await fetch('/api/calendar-auth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),  // Empty object for initial auth request
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to start authentication');
+      }
+
+      if (data.auth_url) {
+        setAuthUrl(data.auth_url);
+        setShowAuthModal(true);
+      } else {
+        throw new Error('No authorization URL received');
+      }
+    } catch (err) {
+      console.error('Auth error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to start authentication');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -307,67 +335,122 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-black py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2 flex justify-center">
-            <CyclingTypingTitle 
-              texts={titleTexts} 
-              typingDuration={80} 
-              pauseDuration={2500} 
-              className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-blue-600 font-mono" 
-              isTypeByLetter={true}
-              cursor="_"
-              cursorColor="text-blue-500"
-            />
-          </h1>
-          <p className="text-lg text-gray-400 mt-4">Automatic Timetable Processing and Calendar Integration</p>
+          <CyclingTypingTitle 
+            texts={titleTexts}
+            className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-blue-700 text-transparent bg-clip-text"
+            typingDuration={100}
+            pauseDuration={2000}
+            isTypeByLetter={true}
+            cursor="_"
+            cursorColor="text-blue-500"
+          />
         </div>
 
-        {/* User Info Section */}
-        <div className="mb-8 p-6 bg-transparent rounded-lg">
+        {/* User Authentication Status */}
+        <div className="mb-6">
           {isLoading ? (
-            <p className="text-gray-300">Loading user info...</p>
-          ) : userInfo?.success && userInfo.authenticated ? (
-            <div className="flex justify-between items-center">
+            <p className="text-center text-gray-400">Loading user info...</p>
+          ) : userInfo?.authenticated ? (
+            <div className="flex items-center justify-between bg-[#121212] p-4 rounded-lg border border-[#3E3E3E]">
               <div>
-                <p className="text-gray-200 font-semibold">Logged in as: {userInfo.name}</p>
-                <p className="text-sm text-gray-400">{userInfo.email}</p>
+                <p className="text-sm text-gray-400">Signed in as:</p>
+                <p className="font-medium text-gray-300">{userInfo.email}</p>
               </div>
               <button
                 onClick={handleLogout}
-                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition-colors duration-200"
+                className="px-4 py-2 text-sm text-red-400 hover:text-red-300"
               >
-                Logout
+                Sign Out
               </button>
             </div>
-          ) : userInfo?.message ? (
-            <div className="flex justify-between items-center">
-              <div>
-                <p className="text-gray-300">{userInfo.message}</p>
-                <p className="text-sm text-gray-400">Please try logging out and authenticating again</p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={fetchUserInfo}
-                  className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors duration-200"
-                >
-                  Refresh
-                </button>
-                <button
-                  onClick={handleLogout}
-                  className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition-colors duration-200"
-                >
-                  Logout
-                </button>
-              </div>
-            </div>
           ) : (
-            <div className="flex justify-between items-center">
-              <p className="text-gray-300">Not logged in to Google Calendar</p>
-            </div>
+            <button
+              onClick={startAuth}
+              className="w-full bg-transparent hover:bg-[#1E3A5F] text-blue-300 px-4 py-2 rounded border border-blue-800 shadow-[0_0_15px_rgba(0,100,255,0.3)] transition-colors"
+            >
+              Sign in with Google Calendar
+            </button>
           )}
         </div>
 
+        {/* Auth Modal */}
+        {showAuthModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
+            <div className="bg-[#121212] rounded-lg p-6 max-w-md w-full border border-[#3E3E3E]">
+              <h3 className="text-xl font-semibold text-white mb-4">Google Calendar Authorization</h3>
+              <p className="mb-4 text-gray-300">Please follow these steps:</p>
+              <ol className="list-decimal list-inside mb-4 space-y-2 text-gray-300">
+                <li>Click the button below to open Google&apos;s authorization page</li>
+                <li>Sign in and grant access to your calendar</li>
+                <li>Copy the authorization code</li>
+                <li>Paste the code below and submit</li>
+              </ol>
+              
+              <button
+                onClick={() => window.open(authUrl, '_blank')}
+                className="w-full mb-4 bg-transparent hover:bg-[#1E3A5F] text-blue-300 px-4 py-2 rounded border border-blue-800 shadow-[0_0_15px_rgba(0,100,255,0.3)] transition-colors"
+              >
+                Open Authorization Page
+              </button>
+
+              <form onSubmit={handleAuthSubmit} className="space-y-4">
+                <div>
+                  <label htmlFor="authCode" className="block text-sm font-medium text-gray-300">
+                    Authorization Code
+                  </label>
+                  <input
+                    type="text"
+                    id="authCode"
+                    value={authCode}
+                    onChange={(e) => setAuthCode(e.target.value)}
+                    className="mt-1 block w-full bg-[#1A1A1A] text-gray-300 border border-[#3E3E3E] rounded-md px-3 py-2 focus:border-blue-700 focus:outline-none"
+                    placeholder="Paste the authorization code here"
+                    required
+                  />
+                </div>
+                
+                <div className="flex justify-end space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthModal(false)}
+                    className="px-4 py-2 border border-[#3E3E3E] rounded-md text-gray-400 hover:text-gray-300 bg-transparent hover:bg-[#1A1A1A]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={authLoading || !authCode}
+                    className={`px-4 py-2 rounded-md ${
+                      authLoading || !authCode
+                        ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                        : 'bg-transparent hover:bg-[#1E3A5F] text-blue-300 border border-blue-800 shadow-[0_0_15px_rgba(0,100,255,0.3)]'
+                    }`}
+                  >
+                    {authLoading ? 'Submitting...' : 'Submit'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Error Messages */}
+        {error && (
+          <div className="mb-4 p-4 bg-[#2A1515] border border-red-900 text-red-400 rounded">
+            {error}
+          </div>
+        )}
+
+        {/* Success Messages */}
+        {syncMessage && (
+          <div className="mb-4 p-4 bg-[#152A15] border border-green-900 text-green-400 rounded">
+            {syncMessage}
+          </div>
+        )}
+
+        {/* Rest of your existing JSX */}
         <div className="bg-[linear-gradient(45deg,transparent_25%,rgba(59,130,246,0.2)_50%,transparent_75%,transparent_100%)] bg-gradient-to-b from-[#14169a] to-[#0D0D0D] relative max-w-3xl mx-auto overflow-hidden rounded-lg border border-[#3E3E3E] bg-[length:250%_250%,100%_100%] bg-[position:-100%_0,0_0] bg-no-repeat p-6 mb-8 shadow-[0_0_30px_rgba(0,80,255,0.25)] transition-[background-position_0s_ease] hover:bg-[position:200%_0,0_0] hover:duration-[1500ms]">
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="mb-8">
@@ -438,12 +521,6 @@ export default function Home() {
               ) : <span className="flex items-center"><span className="mr-2 text-blue-400">$</span><span className="text-blue-300">process timetable</span></span>}
             </button>
           </form>
-
-          {error && (
-            <div className="mt-4 p-4 bg-[#3E2020] rounded-md border border-[#FF4444] text-[#FF6666]">
-              <p className="text-sm">{error}</p>
-            </div>
-          )}
         </div>
 
         {schedule && (
@@ -650,73 +727,6 @@ export default function Home() {
           </>
         )}
       </div>
-
-      {showAuthModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50">
-          <div className="bg-[linear-gradient(45deg,transparent_25%,rgba(59,130,246,0.2)_50%,transparent_75%,transparent_100%)] bg-gradient-to-b from-[#14169a] to-[#0D0D0D] relative overflow-hidden rounded-lg border border-[#3E3E3E] bg-[length:250%_250%,100%_100%] bg-[position:-100%_0,0_0] bg-no-repeat p-6 w-full max-w-md shadow-[0_0_30px_rgba(0,80,255,0.25)] transition-[background-position_0s_ease] hover:bg-[position:200%_0,0_0] hover:duration-[1500ms]">
-            <h3 className="text-xl font-bold text-white mb-4">Google Calendar Authorization</h3>
-            <p className="text-gray-300 mb-4">
-              <span className="text-blue-400 mr-2">$</span>
-              <span>Please visit the following URL to authorize:</span>
-            </p>
-            <div className="bg-[#121212] p-3 rounded-md mb-4 break-all border border-[#3E3E3E]">
-              <a 
-                href={authUrl} 
-          target="_blank"
-          rel="noopener noreferrer"
-                className="text-blue-400 hover:text-blue-300"
-              >
-                {authUrl}
-              </a>
-            </div>
-            <form onSubmit={handleAuthSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-3">
-                  <span className="text-blue-400 mr-2">$</span>
-                  <span>Enter authorization code:</span>
-                </label>
-                <input
-                  type="text"
-                  value={authCode}
-                  onChange={(e) => setAuthCode(e.target.value)}
-                  className="w-full bg-[#121212] text-blue-300 border border-[#3E3E3E] rounded-md px-3 py-2 focus:border-blue-700 focus:outline-none"
-                  placeholder="Paste code here..."
-                  required
-                />
-              </div>
-              <div className="flex justify-end space-x-3">
-                <button
-                  type="button"
-                  onClick={() => setShowAuthModal(false)}
-                  className="px-4 py-2 bg-transparent text-gray-400 hover:text-gray-300 rounded-md border border-[#3E3E3E]"
-                  disabled={authLoading}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={authLoading || !authCode}
-                  className={`px-4 py-2 rounded-md
-                    ${authLoading || !authCode
-                      ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                      : 'bg-transparent hover:bg-[#1E3A5F] text-blue-300 border border-blue-800 shadow-[0_0_15px_rgba(0,100,255,0.3)]'
-                    }`}
-                >
-                  {authLoading ? (
-                    <div className="flex items-center">
-                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Authorizing...
-                    </div>
-                  ) : <span className="flex items-center"><span className="mr-2 text-blue-400">$</span><span>submit-code</span></span>}
-                </button>
-              </div>
-            </form>
-          </div>
-    </div>
-      )}
     </main>
   );
 }
