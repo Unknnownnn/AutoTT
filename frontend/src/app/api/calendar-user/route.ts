@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import { join } from 'path';
 
-export async function GET(req: Request) {
+export async function GET(_: Request) {
   try {
     // Get the project root directory
     const projectRoot = process.cwd().includes('frontend') 
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
           const parsedResult = JSON.parse(jsonMatch[0]);
           console.log('Parsed user info result:', parsedResult);
           resolve(parsedResult);
-        } catch (_error) {
+        } catch {
           console.error('Failed to parse response:', outputData);
           reject(new Error(`Failed to parse response: ${outputData}`));
         }
@@ -114,7 +114,7 @@ export async function POST(req: Request) {
             return;
           }
           resolve(JSON.parse(jsonMatch[0]));
-        } catch (_error) {
+        } catch {
           reject(new Error(`Failed to parse response: ${outputData}`));
         }
       });
