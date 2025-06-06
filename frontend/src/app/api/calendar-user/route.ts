@@ -1,107 +1,131 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import { join } from 'path';
-import { unlink } from 'fs/promises';
-import { existsSync } from 'fs';
 
-export async function GET(): Promise<Response> {
-    try {
-        const projectRoot = join(process.cwd(), '..');
-        const tokenPath = join(projectRoot, 'token.json');
+export async function GET(req: Request) {
+  try {
+    // Get the project root directory
+    const projectRoot = process.cwd().includes('frontend') 
+      ? join(process.cwd(), '..') 
+      : process.cwd();
 
-        if (!existsSync(tokenPath)) {
-            return NextResponse.json({
-                success: true,
-                authenticated: false,
-                message: 'Not authenticated'
-            });
+    console.log('Fetching user info from:', projectRoot);
+
+    const pythonProcess = spawn('python', [
+      join(projectRoot, 'calendar_sync.py'),
+      '--user-info',
+      projectRoot
+    ]);
+
+    const result = await new Promise((resolve, reject) => {
+      let outputData = '';
+      let errorData = '';
+
+      pythonProcess.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        console.log('Python stdout:', chunk);
+        outputData += chunk;
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        console.error('Python stderr:', chunk);
+        errorData += chunk;
+      });
+
+      pythonProcess.on('close', (code) => {
+        console.log('Python process exited with code:', code);
+        if (code !== 0) {
+          reject(new Error(`Process failed: ${errorData}`));
+          return;
         }
 
-        return new Promise<Response>((resolve) => {
-            const pythonProcess = spawn('python', [
-                join(projectRoot, 'calendar_sync.py'),
-                '--get-user',
-                projectRoot
-            ]);
+        try {
+          const jsonMatch = outputData.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            console.error('No JSON in output:', outputData);
+            reject(new Error('No JSON response from process'));
+            return;
+          }
+          const parsedResult = JSON.parse(jsonMatch[0]);
+          console.log('Parsed user info result:', parsedResult);
+          resolve(parsedResult);
+        } catch (err) {
+          console.error('Failed to parse response:', outputData);
+          reject(new Error(`Failed to parse response: ${outputData}`));
+        }
+      });
+    });
 
-            let outputData = '';
-            let errorData = '';
-
-            pythonProcess.stdout.on('data', (data) => {
-                outputData += data.toString();
-            });
-
-            pythonProcess.stderr.on('data', (data) => {
-                errorData += data.toString();
-                console.error('Python stderr:', errorData);
-            });
-
-            pythonProcess.on('close', (code) => {
-                if (code !== 0) {
-                    console.error('Process failed:', errorData);
-                    resolve(NextResponse.json(
-                        { success: false, authenticated: false, message: 'Failed to get user info' },
-                        { status: 500 }
-                    ));
-                    return;
-                }
-
-                try {
-                    const jsonStr = outputData.trim().split('\n').pop() || '';
-                    const result = JSON.parse(jsonStr);
-                    resolve(NextResponse.json(result));
-                } catch (error) {
-                    console.error('Failed to parse Python output:', error);
-                    resolve(NextResponse.json(
-                        { success: false, authenticated: false, message: 'Failed to parse user info' },
-                        { status: 500 }
-                    ));
-                }
-            });
-        });
-    } catch (error) {
-        console.error('Error in get user:', error);
-        return NextResponse.json(
-            { success: false, authenticated: false, message: 'Internal server error' },
-            { status: 500 }
-        );
-    }
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error('Error getting user info:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to get user info' },
+      { status: 500 }
+    );
+  }
 }
 
-export async function POST(request: Request): Promise<Response> {
-    try {
-        const data = await request.json();
-        
-        if (data.action === 'logout') {
-            const projectRoot = join(process.cwd(), '..');
-            const tokenPath = join(projectRoot, 'token.json');
+export async function POST(req: Request) {
+  try {
+    const { action } = await req.json();
+    
+    if (action !== 'logout') {
+      return NextResponse.json(
+        { error: 'Invalid action' },
+        { status: 400 }
+      );
+    }
 
-            try {
-                if (existsSync(tokenPath)) {
-                    await unlink(tokenPath);
-                }
-                return NextResponse.json({
-                    success: true,
-                    message: 'Logged out successfully'
-                });
-            } catch (error) {
-                console.error('Error during logout:', error);
-                return NextResponse.json(
-                    { success: false, message: 'Failed to logout' },
-                    { status: 500 }
-                );
-            }
+    // Get the project root directory
+    const projectRoot = process.cwd().includes('frontend') 
+      ? join(process.cwd(), '..') 
+      : process.cwd();
+
+    const pythonProcess = spawn('python', [
+      join(projectRoot, 'calendar_sync.py'),
+      '--logout',
+      projectRoot
+    ]);
+
+    const result = await new Promise((resolve, reject) => {
+      let outputData = '';
+      let errorData = '';
+
+      pythonProcess.stdout.on('data', (data) => {
+        outputData += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        errorData += data.toString();
+      });
+
+      pythonProcess.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`Process failed: ${errorData}`));
+          return;
         }
 
-        return NextResponse.json(
-            { success: false, message: 'Invalid action' },
-            { status: 400 }
-        );
-    } catch (error) {
-        console.error('Error in post user:', error);
-        return NextResponse.json(
-            { success: false, message: 'Internal server error' },
-            { status: 500 }
-        );
-    }
+        try {
+          const jsonMatch = outputData.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            reject(new Error('No JSON response from process'));
+            return;
+          }
+          resolve(JSON.parse(jsonMatch[0]));
+        } catch (err) {
+          reject(new Error(`Failed to parse response: ${outputData}`));
+        }
+      });
+    });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error('Error during logout:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to logout' },
+      { status: 500 }
+    );
+  }
 } 

@@ -386,8 +386,8 @@ export default function Home() {
                 <li>Sign in and grant access to your calendar</li>
                 <li>Copy the authorization code</li>
                 <li>Paste the code below and submit</li>
-              </ol>
-              
+        </ol>
+
               <button
                 onClick={() => window.open(authUrl, '_blank')}
                 className="w-full mb-4 bg-transparent hover:bg-[#1E3A5F] text-blue-300 px-4 py-2 rounded border border-blue-800 shadow-[0_0_15px_rgba(0,100,255,0.3)] transition-colors"
@@ -726,7 +726,7 @@ export default function Home() {
             </div>
           </>
         )}
-      </div>
+    </div>
     </main>
   );
 }
