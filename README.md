@@ -28,7 +28,7 @@ d. Create OAuth credentials:
   - Download the file and rename it to `credentials.json`
   - Keep this file in the same folder as the program
 
-## Set Up AutoTT
+## Setting Up AutoTT
 > [!TIP]
 > Install in a virtual environment for easy access.
 > To make a virtual environment, use
