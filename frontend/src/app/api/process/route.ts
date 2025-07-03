@@ -5,8 +5,29 @@ import { join } from 'path';
 import os from 'os';
 import fs from 'fs';
 
+// Helper function to find Python executable
+function getPythonCommand() {
+  if (process.platform === 'win32') {
+    // Try 'python' first, then 'py' on Windows
+    try {
+      spawn('python', ['--version']);
+      return 'python';
+    } catch {
+      return 'py';
+    }
+  }
+  return 'python3';  // Use python3 on Unix-like systems
+}
+
+// Helper function to sanitize process output
+function sanitizeOutput(output: string): string {
+  return output.replace(/[\u0000-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+}
+
 export async function POST(req: Request) {
   let tempDir = '';
+  const pythonCommand = getPythonCommand();
+  
   try {
     const formData = await req.formData();
     const image = formData.get('image') as File;
@@ -34,53 +55,88 @@ export async function POST(req: Request) {
     const projectRoot = process.cwd().includes('frontend') 
       ? join(process.cwd(), '..') 
       : process.cwd();
+      
+    console.log('Project root:', projectRoot);
+    console.log('Python command:', pythonCommand);
+    console.log('Image path:', imagePath);
+    console.log('CSV path:', csvPath);
 
-    // Create temp directory using fs.promises.mkdir
-    await mkdir(tempDir, { recursive: true });
+    try {
+      // Create temp directory using fs.promises.mkdir
+      await mkdir(tempDir, { recursive: true });
 
-    // Save uploaded files
-    await writeFile(imagePath, Buffer.from(await image.arrayBuffer()));
-    await writeFile(csvPath, Buffer.from(await csvFile.arrayBuffer()));
+      // Save uploaded files
+      await writeFile(imagePath, Buffer.from(await image.arrayBuffer()));
+      await writeFile(csvPath, Buffer.from(await csvFile.arrayBuffer()));
+      
+      console.log('Files saved successfully');
+    } catch (err) {
+      console.error('Error saving files:', err);
+      throw new Error('Failed to save uploaded files');
+    }
 
     // Process timetable first
-    const pythonProcess = spawn('python', [
+    const pythonProcess = spawn(pythonCommand, [
       join(projectRoot, 'main.py'),
       imagePath,
       csvPath,
       '--return-schedules'
-    ]);
+    ], {
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        PYTHONUTF8: '1'
+      }
+    });
 
     const scheduleData = await new Promise((resolve, reject) => {
       let outputData = '';
       let errorData = '';
 
       pythonProcess.stdout.on('data', (data) => {
-        outputData += data.toString();
+        const sanitizedData = sanitizeOutput(data.toString());
+        console.log('Python stdout:', sanitizedData);
+        outputData += sanitizedData;
       });
 
       pythonProcess.stderr.on('data', (data) => {
-        errorData += data.toString();
+        const sanitizedData = sanitizeOutput(data.toString());
+        console.error('Python stderr:', sanitizedData);
+        errorData += sanitizedData;
       });
 
       pythonProcess.on('close', (code) => {
+        console.log('Python process exited with code:', code);
         if (code !== 0) {
-          reject(new Error(`Python process failed: ${errorData}`));
+          reject(new Error(`Python process failed (code ${code}): ${errorData}`));
           return;
         }
 
         try {
+          // Look for JSON data in the output
           const jsonMatch = outputData.match(/\{[\s\S]*\}/);
           if (!jsonMatch) {
+            console.error('Full output:', outputData);
             reject(new Error('No JSON data found in output'));
             return;
           }
-          resolve(JSON.parse(jsonMatch[0]));
-        } catch {
-          reject(new Error(`Failed to parse output: ${outputData}`));
+
+          // Parse and validate the JSON data
+          const jsonData = JSON.parse(jsonMatch[0]);
+          if (!jsonData || typeof jsonData !== 'object') {
+            throw new Error('Invalid JSON data structure');
+          }
+
+          resolve(jsonData);
+        } catch (err) {
+          console.error('Parse error:', err);
+          console.error('Full output:', outputData);
+          reject(new Error(`Failed to parse output: ${err instanceof Error ? err.message : 'Unknown error'}`));
         }
       });
 
       pythonProcess.on('error', (err) => {
+        console.error('Process error:', err);
         reject(new Error(`Failed to start process: ${err.message}`));
       });
     });
@@ -93,7 +149,7 @@ export async function POST(req: Request) {
     await writeFile(schedulePath, JSON.stringify(scheduleData));
 
     // Calendar sync path
-    const calendarProcess = spawn('python', [
+    const calendarProcess = spawn(pythonCommand, [
       join(projectRoot, 'calendar_sync.py'),
       schedulePath,
       selectedDays || '',
@@ -135,7 +191,7 @@ export async function POST(req: Request) {
           // If auth is needed, prepare the auth window
           if (!result.success && result.needs_auth) {
             // Start the new window auth process
-            const authProcess = spawn('python', [
+            const authProcess = spawn(pythonCommand, [
               join(projectRoot, 'calendar_sync.py'),
               '--auth-new-window',
               projectRoot
@@ -161,7 +217,7 @@ export async function POST(req: Request) {
                   const authResult = JSON.parse(jsonMatch[0]);
                   if (authResult.success && authResult.auth_script) {
                     // Launch the auth window using cmd.exe
-                    spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `python "${authResult.auth_script}"`], {
+                    spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', `${pythonCommand} "${authResult.auth_script}"`], {
                       cwd: projectRoot,
                       shell: true,
                     });
@@ -197,18 +253,6 @@ export async function POST(req: Request) {
         reject(new Error(`Failed to start calendar sync: ${err.message}`));
       });
     });
-
-    // Clean up uploaded files
-    try {
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
-      if (fs.existsSync(csvPath)) {
-        fs.unlinkSync(csvPath);
-      }
-    } catch (err) {
-      console.error('Failed to clean up uploaded files:', err);
-    }
 
     return NextResponse.json(result);
   } catch (error) {

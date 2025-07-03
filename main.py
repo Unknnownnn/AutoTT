@@ -8,7 +8,23 @@ import argparse
 import os
 import sys
 import json
+import locale
 
+# Set UTF-8 encoding for stdout
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
+
+# Modify print function to handle encoding errors
+def safe_print(*args, **kwargs):
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Try with ASCII if UTF-8 fails
+        try:
+            print(*[str(arg).encode('ascii', 'replace').decode() for arg in args], **kwargs)
+        except:
+            # Last resort: skip problematic characters
+            print(*[str(arg).encode('ascii', 'ignore').decode() for arg in args], **kwargs)
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Process timetable image and course codes.')
@@ -40,158 +56,328 @@ def preprocess_image(image_path):
     image = cv2.imread(image_path)
     if image is None:
         raise FileNotFoundError(f"Could not load image at {image_path}")
+        
+    # Get image dimensions
+    height, width = image.shape[:2]
+    print(f"Original image dimensions: {width}x{height}")
+    
+    # Convert to HSV for better color detection
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    
+    # Define yellow and green color ranges in HSV
+    yellow_lower = np.array([20, 50, 180])
+    yellow_upper = np.array([35, 255, 255])
+    green_lower = np.array([35, 50, 180])
+    green_upper = np.array([85, 255, 255])
+    
+    # Create masks for yellow and green
+    yellow_mask = cv2.inRange(hsv, yellow_lower, yellow_upper)
+    green_mask = cv2.inRange(hsv, green_lower, green_upper)
+    
+    # Combine masks
+    highlight_mask = cv2.bitwise_or(yellow_mask, green_mask)
+    
+    # Convert original image to grayscale for OCR
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    
+    # Create binary image for structure detection
+    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    
     print("Image preprocessing complete.")
-    return image, gray, thresh
+    return image, gray, highlight_mask, binary
 
-def get_cell_regions(thresh):
+def get_cell_regions(mask, binary):
     print("Detecting cell regions...")
-    kernel = np.ones((3, 3), np.uint8)
-    dilated = cv2.dilate(thresh, kernel, iterations=2)
+    
+    # Get image dimensions
+    height, width = mask.shape[:2]
+    
+    # Create a copy of the original image for visualization
+    debug_image = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    
+    # Find contours in the highlight mask (yellow/green cells)
     contours, _ = cv2.findContours(
-        dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-    cells = []
+    
+    # Get all cells with their coordinates
+    all_cells = []
+    min_area = (width * height) * 0.0005
+    max_area = (width * height) * 0.02
+    
+    print(f"\nArea thresholds: min={min_area:.2f}, max={max_area:.2f}")
+    
     for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if 30 < w < 300 and 20 < h < 100:
-            cells.append((x, y, w, h))
-    print(f"Found {len(cells)} cells.")
-    return cells
-
-def extract_text_from_cells(image, cells):
-    print("Starting text extraction with pytesseract...")
-    total_cells = len(cells)
-    matrix = []
-    current_row = []
-    last_y = -1
-    processed_cells = 0
-    cells = sorted(cells, key=lambda x: (x[1], x[0]))
-    for (x, y, w, h) in cells:
-        processed_cells += 1
-        if processed_cells%30==0:
-            print(f"Processing cell {processed_cells}/{total_cells} at position ({x}, {y})...")
-        if last_y != -1 and abs(y - last_y) > 20:
-            if current_row:
-                matrix.append(current_row)
-                current_row = []
-        cell_img = image[y:y+h, x:x+w]
-        pil_img = Image.fromarray(cv2.cvtColor(cell_img, cv2.COLOR_BGR2RGB))
-        text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
-        current_row.append(text if text else "")
-        last_y = y
-    if current_row:
-        matrix.append(current_row)
-    print("Text extraction complete.")
-    print("\nExtracted Matrix:")
-    for row in matrix:
-        print(row)
-    return matrix
-
-def map_periods_to_timings(matrix):
-    print("Mapping periods to timings...")
+        area = cv2.contourArea(contour)
+        if min_area < area < max_area:
+            x, y, w, h = cv2.boundingRect(contour)
+            padding = 2
+            x = max(0, x - padding)
+            y = max(0, y - padding)
+            w = min(width - x, w + 2*padding)
+            h = min(height - y, h + 2*padding)
+            all_cells.append((x, y, w, h))
+            # Draw rectangle on debug image
+            cv2.rectangle(debug_image, (x, y), (x+w, y+h), (0, 255, 0), 2)
     
-    if len(matrix) < 2:
-        raise ValueError("Matrix does not have enough rows. Expected at least 2 rows for timings and data.")
+    # Sort cells by y-coordinate first to group rows
+    all_cells.sort(key=lambda cell: cell[1])
     
-    # Extract theory timings
-    theory_timings = []
-    print("Extracting theory timings...")
-    start_times = matrix[0][2:]
-    end_times = matrix[1][1:]
-    for i in range(len(start_times)):
-        if i >= len(end_times):
-            print(f"Warning: No end time for start time at index {i}. Skipping.")
+    # Find the start of content (after blue header)
+    if len(all_cells) > 0:
+        content_start_y = all_cells[0][1]  # Y coordinate of first highlighted cell
+        print(f"Content starts at y={content_start_y}")
+        # Draw content start line
+        cv2.line(debug_image, (0, content_start_y), (width, content_start_y), (255, 0, 0), 2)
+    else:
+        print("No cells detected!")
+        return [], []
+    
+    # Group cells into day rows (each day has theory and lab row)
+    day_rows = []
+    current_theory_row = []
+    current_lab_row = []
+    last_y = None
+    y_threshold = height * 0.03  # 3% of image height for row grouping
+    print(f"Y-coordinate threshold for row grouping: {y_threshold:.2f}")
+    
+    for cell in all_cells:
+        x, y, w, h = cell
+        # Skip cells above content start
+        if y < content_start_y:
             continue
-        start = start_times[i]
-        end = end_times[i]
-        if start.lower() != "lunch" and end:
-            theory_timings.append(f"{start}-{end}")
+            
+        if last_y is None:
+            current_theory_row.append(cell)
+            print(f"\nStarting new theory row at y={y}")
         else:
-            print(f"Skipping time slot at index {i}: Start={start}, End={end}")
+            y_diff = abs(y - last_y)
+            print(f"Y difference: {y_diff:.2f} (threshold: {y_threshold:.2f})")
+            if y_diff < y_threshold:
+                # Same row
+                if len(current_lab_row) > 0:
+                    current_lab_row.append(cell)
+                    print(f"Adding to lab row: ({x}, {y})")
+                else:
+                    current_theory_row.append(cell)
+                    print(f"Adding to theory row: ({x}, {y})")
+            else:
+                # New row
+                if len(current_theory_row) > 0 and len(current_lab_row) == 0:
+                    # Moving to lab row
+                    current_lab_row.append(cell)
+                    print(f"\nStarting new lab row at y={y}")
+                else:
+                    # Complete day, store and reset
+                    if current_theory_row and current_lab_row:
+                        # Sort each row by x-coordinate
+                        current_theory_row.sort(key=lambda c: c[0])
+                        current_lab_row.sort(key=lambda c: c[0])
+                        day_rows.append((current_theory_row[:12], current_lab_row[:12]))
+                        print(f"\nCompleted day {len(day_rows)}:")
+                        print(f"Theory cells: {len(current_theory_row[:12])}")
+                        print(f"Lab cells: {len(current_lab_row[:12])}")
+                    # Start new theory row
+                    current_theory_row = [cell]
+                    current_lab_row = []
+                    print(f"\nStarting new theory row at y={y}")
+        last_y = y
     
-    # Correct the OCR error in theory timings
-    print(f"Original Theory Timings: {theory_timings}")
-    theory_timings[3] = "10:45-11:35"  # Fix the fourth slot
-    print(f"Corrected Theory Timings: {theory_timings}")
+    # Add the last day if complete
+    if current_theory_row and current_lab_row:
+        current_theory_row.sort(key=lambda c: c[0])
+        current_lab_row.sort(key=lambda c: c[0])
+        day_rows.append((current_theory_row[:12], current_lab_row[:12]))
+        print(f"\nCompleted final day {len(day_rows)}:")
+        print(f"Theory cells: {len(current_theory_row[:12])}")
+        print(f"Lab cells: {len(current_lab_row[:12])}")
     
-    # Hardcode lab timings since OCR failed to extract them
-    lab_timings = [
-        "08:00-08:50", "08:50-09:40", "09:50-10:40", "10:40-11:30", 
-        "11:40-12:30", "12:30-13:20", "14:00-14:50", "14:50-15:40", 
+    # Save debug image
+    cv2.imwrite('detected_regions.png', debug_image)
+    print("\nSaved visualization to 'detected_regions.png'")
+    
+    # Flatten the cells while preserving theory/lab information
+    processed_cells = []
+    for day_index, (theory_row, lab_row) in enumerate(day_rows, 1):
+        print(f"\nDay {day_index}:")
+        # Add theory cells
+        print("Theory cells x-coordinates:", [x for x, _, _, _ in theory_row])
+        for cell in theory_row:
+            processed_cells.append(('theory', cell))
+        # Add lab cells
+        print("Lab cells x-coordinates:", [x for x, _, _, _ in lab_row])
+        for cell in lab_row:
+            processed_cells.append(('lab', cell))
+    
+    print(f"\nFound {len(processed_cells)} cells in {len(day_rows)} days")
+    return processed_cells, []  # Empty timing cells as we're using hardcoded timings
+
+def extract_text_from_cells(image, cells, timing_cells=None):
+    print("Starting text extraction from cells...")
+    matrix = []
+    timings = {'theory': [], 'lab': []}
+    
+    # Then extract course data
+    for (cell_type, (x, y, w, h)) in cells:
+        # Extract the cell image with strict padding
+        padding = 2  # Reduced padding to stay within borders
+        x_start = max(0, x - padding)
+        y_start = max(0, y - padding)
+        x_end = min(image.shape[1], x + w + padding)
+        y_end = min(image.shape[0], y + h + padding)
+        cell_img = image[y_start:y_end, x_start:x_end]
+        
+        # Convert to PIL Image
+        pil_img = Image.fromarray(cv2.cvtColor(cell_img, cv2.COLOR_BGR2RGB))
+        
+        # Scale up for better OCR
+        scale_factor = 3.0  # Increased scale factor for better recognition
+        new_size = (int(cell_img.shape[1] * scale_factor), int(cell_img.shape[0] * scale_factor))
+        pil_img = pil_img.resize(new_size, Image.Resampling.LANCZOS)
+        
+        # Try different PSM modes with specific configurations
+        psm_modes = [
+            (7, '--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'),  # Single line with limited chars
+            (6, '--psm 6'),  # Uniform block of text
+            (3, '--psm 3')   # Fully automatic
+        ]
+        best_text = ""
+        max_confidence = 0
+        
+        for psm, config in psm_modes:
+            # Extract text with confidence info
+            data = pytesseract.image_to_data(
+                pil_img,
+                config=config,
+                output_type=pytesseract.Output.DICT
+            )
+            
+            # Combine all text with confidence above threshold
+            text_parts = []
+            avg_confidence = 0
+            valid_parts = 0
+            
+            for i in range(len(data['text'])):
+                if int(data['conf'][i]) > 25:  # Lower confidence threshold for short texts
+                    text = data['text'][i].strip()
+                    if text:
+                        text_parts.append(text)
+                        avg_confidence += int(data['conf'][i])
+                        valid_parts += 1
+            
+            if valid_parts > 0:
+                avg_confidence /= valid_parts
+                text = ' '.join(text_parts)
+                
+                # Special handling for short codes
+                if re.match(r'^[A-Z]\d+$|^[A-Z]{2}\d+$', text):  # Matches A1, B2, TG1, etc.
+                    avg_confidence += 10  # Boost confidence for valid short codes
+                
+                if avg_confidence > max_confidence:
+                    max_confidence = avg_confidence
+                    best_text = text
+        
+        # Clean up the extracted text
+        best_text = best_text.strip()
+        best_text = re.sub(r'\s+', ' ', best_text)  # Normalize spaces
+        
+        # Always add the cell to matrix, even if empty
+        matrix.append((best_text, (x, y, w, h)))
+        print(f"Extracted text from cell at ({x}, {y}): '{best_text}' ({cell_type})")
+    
+    return matrix, timings
+
+def map_periods_to_timings(matrix, timings):
+    # Hardcoded structure
+    days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
+    
+    # Hardcoded timing slots (12 slots excluding lunch)
+    theory_slots = [
+        "08:00-08:50", "08:55-09:45", "09:50-10:40", "10:45-11:35",
+        "11:40-12:30", "12:35-13:25", "14:00-14:50", "14:55-15:45",
+        "15:50-16:40", "16:45-17:35", "17:40-18:30", "18:35-19:25"
+    ]
+    
+    lab_slots = [
+        "08:00-08:50", "08:50-09:40", "09:50-10:40", "10:40-11:30",
+        "11:40-12:30", "12:30-13:20", "14:00-14:50", "14:50-15:40",
         "15:50-16:40", "16:40-17:30", "17:40-18:30", "18:30-19:20"
     ]
-    print(f"Lab Timings (hardcoded): {lab_timings}")
     
-    period_pattern = r'[A-Z]+\d+-[A-Z]{4}\d{3}[A-Z]-[A-Z]{2,3}-AB\d-\d{3}-?[A-Z]*'
+    print("\nStarting period mapping:")
+    print("------------------------")
     
-    # Process each day
-    day_schedules = {}
-    current_day = None
+    # Initialize schedules
+    day_schedules = {day: [] for day in days}
     
-    for row in matrix[2:]:
-        if len(row) < 2:
-            print(f"Skipping row due to insufficient columns: {row}")
-            continue
+    # Process cells in order (they're already organized by day and type)
+    current_day_index = 0
+    current_slot_index = 0
+    current_type = 'theory'
+    
+    print(f"\nInitial state: Day={days[current_day_index]}, Type={current_type}, Slot={current_slot_index}")
+    
+    for cell_text, coords in matrix:
+        print(f"\nProcessing cell: '{cell_text}'")
+        print(f"Current state: Day={days[current_day_index]}, Type={current_type}, Slot={current_slot_index}")
         
-        # Check if the first element is THEORY or LAB (continuation of previous day)
-        if row[0] in ["THEORY", "LAB"]:
-            if current_day is None:
-                print(f"Error: No day specified before encountering {row[0]} row: {row}")
-                continue
-            current_type = row[0]
-            schedule = row[1:]
-            day = current_day
-        # Check if the second element is THEORY or LAB (new day)
-        elif row[1] in ["THEORY", "LAB"]:
-            current_type = row[1]
-            day = row[0]
-            current_day = day  # Update the current day
-            schedule = row[2:]
+        # Skip if we've processed all days
+        if current_day_index >= len(days):
+            print("Reached end of days, stopping")
+            break
+            
+        day = days[current_day_index]
+        slots = lab_slots if current_type == 'lab' else theory_slots
+        timing = slots[current_slot_index]
+        
+        # Clean and validate the cell text
+        cell_text = normalize_period(cell_text) if cell_text else ""
+        
+        # Always map the cell, even if empty or invalid
+        if cell_text and re.search(r'[A-Z]+\d+-[A-Z]{4}\d{3}[A-Z]?-[A-Z]{2,3}-AB\d-\d{3}(?:-[A-Z]+)?', cell_text):
+            print(f"✓ Valid period: {cell_text}")
+            day_schedules[day].append((cell_text, timing))
         else:
-            print(f"Skipping row due to missing THEORY/LAB label: {row}")
-            continue
+            print(f"ℹ Skipping invalid/empty text: '{cell_text}' but counting slot")
         
-        print(f"Processing schedule for {day} ({current_type}): {schedule}")
-        
-        # Choose timings based on type
-        timings = theory_timings if current_type == "THEORY" else lab_timings
-        
-        # Map each period to its timing
-        day_schedule = day_schedules.get(day, [])  # Append to existing schedule for this day
-        timing_index = 0
-        for period in schedule:
-            if timing_index >= len(timings):
-                print(f"Warning: Ran out of timings for {day}. Stopping at period {period}.")
-                break
-            if period and period.lower() != "lunch":
-                # Check if the period matches the expected pattern
-                cleaned_period = normalize_period(period)
-
-                if re.search(period_pattern, cleaned_period):
-                    print(f"Assigning {cleaned_period} to time slot {timings[timing_index]}")
-                    day_schedule.append((cleaned_period, timings[timing_index]))
-                else:
-                    print(f"Period {period} (cleaned: {cleaned_period}) does not match the expected pattern. Skipping.")
-
-                timing_index += 1
-                
-            elif period == '':
-                timing_index += 1
+        # Always move to next slot
+        current_slot_index += 1
+        if current_slot_index >= 12:
+            current_slot_index = 0
+            if current_type == 'theory':
+                current_type = 'lab'
+                print("Switching to lab row")
             else:
-                print(f"Skipping period in {day}: {period}")
-        
-        day_schedules[day] = day_schedule
+                current_type = 'theory'
+                current_day_index += 1
+                if current_day_index < len(days):
+                    print(f"Moving to next day: {days[current_day_index]}")
     
-    print("Mapping complete.")
+    print("\nMapping complete!")
+    print("----------------")
+    for day in days:
+        print(f"\n{day}:")
+        for period, timing in day_schedules[day]:
+            print(f"  {timing}: {period}")
+    
     return day_schedules
 
 def get_location(period_code):
-    # Extract location from codes like F2-BMAT202L-TH-AB3-206-ALL or L1-BMAT202P-LO-AB2-301A-ALL
-    match = re.search(r'([A-Z]+\d-\d{3}A?)(?=-[A-Z]*$)', period_code)
+    # Extract location from codes like L5-BCSE301P-LO-AB1-205B-ALL or F2-BMAT202L-TH-AB3-206-ALL
+    # First try to match the full location pattern (AB1-205B)
+    match = re.search(r'(AB\d-\d{3}[A-Z]?)', period_code)
     if match:
         return match.group(1)
+    
+    # If that fails, try to match just the room number pattern
+    match = re.search(r'(\d{3}[A-Z]?)(?=-[A-Z]+$)', period_code)
+    if match:
+        # Try to find the block
+        block_match = re.search(r'-(AB\d)-', period_code)
+        if block_match:
+            return f"{block_match.group(1)}-{match.group(1)}"
+        return match.group(1)
+    
     return "Unknown"
 
 def get_course_name(course_code, course_map):
@@ -217,14 +403,14 @@ def extract_course_code(period_code):
 
 def display_day_schedules(day_schedules, course_map):
     if not course_map:
-        print("\nWarning: No course mappings available. Displaying original codes.")
+        safe_print("\nWarning: No course mappings available. Displaying original codes.")
         return {}
     
-    print("\nDetailed Day-wise Schedules:")
+    safe_print("\nDetailed Day-wise Schedules:")
     all_periods = {}
     
     for day, schedule in sorted(day_schedules.items()):
-        print(f"\n{day}:")
+        safe_print(f"\n{day}:")
         day_periods = []
         
         # First create all period info objects
@@ -283,11 +469,11 @@ def display_day_schedules(day_schedules, course_map):
         
         # Display periods in a structured format
         for period in merged_periods:
-            print(f"  Time: {period['time']}")
-            print(f"  Course: {period['course_name']}")
-            print(f"  Code: {period['course_code']}")
-            print(f"  Location: {period['location']}")
-            print()  # Empty line between periods
+            safe_print(f"  Time: {period['time']}")
+            safe_print(f"  Course: {period['course_name']}")
+            safe_print(f"  Code: {period['course_code']}")
+            safe_print(f"  Location: {period['location']}")
+            safe_print()  # Empty line between periods
     
     return all_periods
 
@@ -326,15 +512,15 @@ def read_course_codes(csv_path):
 def main(image_path=None, csv_path=None, return_schedules=False):
     try:
         # Process image and get regions
-        image, gray, thresh = preprocess_image(image_path)
-        cells = get_cell_regions(thresh)
+        image, gray, mask, binary = preprocess_image(image_path)
+        cells, timing_cells = get_cell_regions(mask, binary)
         
         if not cells:
             raise ValueError("No cells detected in the table")
             
         # Extract text and map periods
-        matrix = extract_text_from_cells(image, cells)
-        day_schedules = map_periods_to_timings(matrix)
+        matrix, timings = extract_text_from_cells(image, cells, timing_cells)
+        day_schedules = map_periods_to_timings(matrix, timings)
         course_map = read_course_codes(csv_path)
         
         # Format and return or display the schedule

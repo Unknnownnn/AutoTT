@@ -275,11 +275,11 @@ def create_calendar_event(service, period_info, event_date, is_recurring=True):
     start_hour, start_minute = map(int, start_time.split(':'))
     end_hour, end_minute = map(int, end_time.split(':'))
     
-    # Add 5 hours and 30 minutes to compensate for timezone conversion
-    start_hour += 5
-    start_minute += 30
-    end_hour += 5
-    end_minute += 30
+    # Add 30 minutes to correct the offset
+    start_minute += 0
+    end_minute += 0
+    start_hour += 0
+    end_hour += 0
     
     # Handle minute overflow
     if start_minute >= 60:
@@ -288,6 +288,8 @@ def create_calendar_event(service, period_info, event_date, is_recurring=True):
     if end_minute >= 60:
         end_hour += 1
         end_minute -= 60
+    
+    # Add 5 hours and 30 minutes to compensate for timezone conversion
     
     # Handle hour overflow
     start_date = event_date
@@ -362,6 +364,10 @@ def sync_timetable_to_calendar(image_path, csv_path, start_date_str="2024-06-04"
     print("Processing timetable and course data...")
     day_schedules = process_timetable(image_path, csv_path, return_schedules=True)
     
+    if not day_schedules:
+        print("Failed to process timetable")
+        return
+    
     proceed, selected_days, event_type = verify_schedule_data(day_schedules)
     if not proceed or not selected_days:
         return
@@ -386,7 +392,7 @@ def sync_timetable_to_calendar(image_path, csv_path, start_date_str="2024-06-04"
     print(f"\nEvents will be created starting from: {start_date_str}")
     events_created = 0
     
-    # Process each selected day's schedule
+    # Process each selected day's schedule using the already verified day_schedules
     for day in selected_days:
         # Get the next occurrence of this weekday
         event_date = get_next_weekday(start_date, day)
