@@ -1,4 +1,4 @@
-# Automatic Image to Google Calender for tables
+# Automatic Image to Google Calender
 
 A python based NextJS webpage to automatically sync data extracted from an image using pytesseract and OCR and export to Google Calender using API calls
 
